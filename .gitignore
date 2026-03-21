@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime logs and temp files
+*.log
+*.pid
+*.pid.lock
+*.seed
+*.tmp
+*.temp
+*.cache
+
+# Environment files and secrets
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+.envrc
+.npmrc
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+!.env.example
+
+# Build / test output
+coverage/
+dist/
+.nyc_output/
+
+# Local runtime data
+/sessions.json
+/.codex-schema/
+/.codex-im/
+
+# IDE / editor files
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
