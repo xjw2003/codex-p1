@@ -91,7 +91,9 @@ async function handleCardAction(runtime, data) {
 
   if (action.kind === "approval") {
     runCardActionTask(runtime, runtime.handleApprovalCardActionAsync(action, data));
-    return buildCardResponse({});
+    return buildCardResponse({
+      toast: "授权请求已提交，正在处理",
+    });
   }
 
   const normalized = messageNormalizers.normalizeCardActionContext(data, runtime.config);

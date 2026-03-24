@@ -100,6 +100,18 @@ function mapCodexMessageToImEvent(message) {
     };
   }
 
+  if (method === "turn/cancelled") {
+    return {
+      type: "im.run_state",
+      payload: {
+        threadId,
+        turnId,
+        state: "cancelled",
+        text: "Stopped.",
+      },
+    };
+  }
+
   if (isApprovalRequestMethod(method)) {
     return {
       type: "im.approval_request",
@@ -255,7 +267,7 @@ function eventShouldClearPendingReaction(event) {
 
   if (event.type === "im.run_state") {
     const state = String(event.payload?.state || "").toLowerCase();
-    return state === "completed" || state === "failed";
+    return state === "completed" || state === "failed" || state === "cancelled";
   }
 
   if (event.type === "im.approval_request") {

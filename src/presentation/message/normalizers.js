@@ -44,6 +44,7 @@ function extractCardAction(data) {
       scope: value.scope || "once",
       requestId: value.requestId,
       threadId: value.threadId,
+      threadKey: value.threadKey || "",
     };
   }
   if (value.kind === "panel") {
@@ -52,6 +53,7 @@ function extractCardAction(data) {
       kind: value.kind,
       action: value.action || "",
       selectedValue,
+      threadKey: value.threadKey || "",
     };
   }
   if (value.kind === "thread") {
@@ -59,6 +61,7 @@ function extractCardAction(data) {
       kind: value.kind,
       action: value.action || "",
       threadId: value.threadId || "",
+      threadKey: value.threadKey || "",
     };
   }
   if (value.kind === "workspace") {
@@ -66,6 +69,7 @@ function extractCardAction(data) {
       kind: value.kind,
       action: value.action || "",
       workspaceRoot: value.workspaceRoot || "",
+      threadKey: value.threadKey || "",
     };
   }
   return null;
@@ -89,7 +93,7 @@ function normalizeCardActionContext(data, config) {
     provider: "feishu",
     workspaceId: config.defaultWorkspaceId,
     chatId,
-    threadKey: "",
+    threadKey: normalizeIdentifier(data?.action?.value?.threadKey),
     senderId,
     messageId,
     text: "",
@@ -118,6 +122,9 @@ function parseCommand(text) {
 
   const exactCommands = {
     stop: ["stop"],
+    status: ["status"],
+    account: ["account"],
+    quota: ["quota"],
     where: ["where"],
     inspect_message: ["message"],
     help: ["help"],

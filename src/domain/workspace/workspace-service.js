@@ -111,6 +111,161 @@ async function handleWhereCommand(runtime, normalized) {
   await showStatusPanel(runtime, normalized);
 }
 
+async function handleStatusCommand(runtime, normalized) {
+  const workspaceContext = await resolveWorkspaceContext(runtime, normalized, {
+    replyToMessageId: normalized.messageId,
+  });
+  if (!workspaceContext) {
+    return;
+  }
+  const { bindingKey, workspaceRoot } = workspaceContext;
+  const knownThreadId = findKnownThreadId(runtime, bindingKey, workspaceRoot);
+  if (knownThreadId) {
+    await sendStatusTextForThread(runtime, normalized, workspaceRoot, knownThreadId);
+    return;
+  }
+
+  const { threadId } = await runtime.resolveWorkspaceThreadState({
+    bindingKey,
+    workspaceRoot,
+    normalized,
+    autoSelectThread: true,
+  });
+
+  if (!threadId) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: [
+        `当前项目：\`${workspaceRoot}\``,
+        "当前没有可查询的线程状态。",
+        "可先直接发送消息，或使用 `/codex new` 新建线程。",
+      ].join("\n"),
+    });
+    return;
+  }
+
+  await sendStatusTextForThread(runtime, normalized, workspaceRoot, threadId);
+}
+
+async function sendStatusTextForThread(runtime, normalized, workspaceRoot, threadId) {
+  const inactivityStatus = runtime.getInactivityStatus(threadId);
+  if (inactivityStatus) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: runtime.buildQueriedInactivityStatusText(inactivityStatus),
+      kind: inactivityStatus.diagnosis?.kind || "info",
+    });
+    return;
+  }
+
+  const status = runtime.describeWorkspaceStatus(threadId);
+  const statusDetailLines = buildRuntimeStatusLines(runtime, threadId, status);
+  await runtime.sendInfoCardMessage({
+    chatId: normalized.chatId,
+    replyToMessageId: normalized.messageId,
+    text: [
+      `当前项目：\`${workspaceRoot}\``,
+      `线程：\`${threadId}\``,
+      ...statusDetailLines,
+      "当前没有检测到“无变化等待”监视中的任务。",
+      "如需查看项目和线程面板，可发送 `/codex where`。",
+    ].join("\n"),
+    kind: status.code === "running" ? "progress" : "info",
+  });
+}
+
+function buildRuntimeStatusLines(runtime, threadId, status = runtime.describeWorkspaceStatus(threadId)) {
+  const lines = [
+    `桥接层状态：${status?.label || "未知"}`,
+  ];
+  const connection = describeCodexConnection(runtime);
+  lines.push(`Codex 连接：${connection.label}`);
+  if (connection.detail) {
+    lines.push(`连接说明：${connection.detail}`);
+  }
+  const recentEventText = describeRecentCodexEvent(runtime);
+  if (recentEventText) {
+    lines.push(recentEventText);
+  }
+  return lines;
+}
+
+function describeCodexConnection(runtime) {
+  const snapshot = runtime.codex?.getConnectionSnapshot?.() || null;
+  if (!snapshot) {
+    return { label: "未知", detail: "" };
+  }
+  if (!snapshot.connected) {
+    return {
+      label: "未连接",
+      detail: normalizeText(snapshot.lastDisconnectReason) || formatStatusTimestamp(snapshot.lastDisconnectAt) || "",
+    };
+  }
+  if (!snapshot.ready) {
+    return { label: "连接中", detail: "连接已建立，但 Codex 尚未完成初始化" };
+  }
+  return { label: "已连接", detail: "" };
+}
+
+function describeRecentCodexEvent(runtime) {
+  const method = normalizeText(runtime.lastCodexEventMethod);
+  const timestampText = formatStatusTimestamp(runtime.lastCodexEventAt);
+  if (!method && !timestampText) {
+    return "";
+  }
+  if (method && timestampText) {
+    return `最近 Codex 事件：\`${method}\` · ${timestampText}`;
+  }
+  return method
+    ? `最近 Codex 事件：\`${method}\``
+    : `最近 Codex 事件时间：${timestampText}`;
+}
+
+function formatStatusTimestamp(value) {
+  const timestamp = Number(value || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return "";
+  }
+  return new Date(timestamp).toLocaleString("zh-CN", { hour12: false });
+}
+
+function findKnownThreadId(runtime, bindingKey, workspaceRoot) {
+  const boundThreadId = runtime.resolveThreadIdForBinding(bindingKey, workspaceRoot);
+  if (boundThreadId) {
+    return boundThreadId;
+  }
+
+  const candidates = new Set();
+  collectThreadIds(candidates, runtime.responseWatchByThreadId);
+  collectThreadIds(candidates, runtime.activeTurnIdByThreadId);
+  collectThreadIds(candidates, runtime.pendingApprovalByThreadId);
+
+  for (const threadId of candidates) {
+    const threadBindingKey = runtime.bindingKeyByThreadId?.get(threadId) || "";
+    if (threadBindingKey && threadBindingKey !== bindingKey) {
+      continue;
+    }
+    if (runtime.resolveWorkspaceRootForThread(threadId) === workspaceRoot) {
+      return threadId;
+    }
+  }
+
+  return "";
+}
+
+function collectThreadIds(target, map) {
+  if (!(map instanceof Map)) {
+    return;
+  }
+  for (const threadId of map.keys()) {
+    if (typeof threadId === "string" && threadId.trim()) {
+      target.add(threadId.trim());
+    }
+  }
+}
+
 async function showStatusPanel(runtime, normalized, { replyToMessageId, noticeText = "" } = {}) {
   const workspaceContext = await resolveWorkspaceContext(runtime, normalized, { replyToMessageId });
   if (!workspaceContext) {
@@ -134,6 +289,7 @@ async function showStatusPanel(runtime, normalized, { replyToMessageId, noticeTe
   const availableModels = Array.isArray(availableCatalog?.models) ? availableCatalog.models : [];
   const modelOptions = buildModelSelectOptions(availableModels);
   const effortOptions = buildEffortSelectOptions(availableModels, codexParams?.model || "");
+  const statusSummaryText = buildRuntimeStatusLines(runtime, threadId, status).join("\n");
   await runtime.sendInteractiveCard({
     chatId: normalized.chatId,
     replyToMessageId: replyTarget,
@@ -143,10 +299,12 @@ async function showStatusPanel(runtime, normalized, { replyToMessageId, noticeTe
       modelOptions,
       effortOptions,
       threadId,
+      threadKey: normalized.threadKey || "",
       currentThread,
       recentThreads,
       totalThreadCount: threads.length,
       status,
+      statusSummaryText,
       noticeText,
     }),
   });
@@ -441,7 +599,9 @@ async function handleWorkspacesCommand(runtime, normalized, { replyToMessageId }
   await runtime.sendInteractiveCard({
     chatId: normalized.chatId,
     replyToMessageId: replyTarget,
-    card: runtime.buildWorkspaceBindingsCard(items),
+    card: runtime.buildWorkspaceBindingsCard(items, {
+      threadKey: normalized.threadKey || "",
+    }),
   });
 }
 
@@ -475,6 +635,7 @@ async function showThreadPicker(runtime, normalized, { replyToMessageId } = {}) 
       workspaceRoot,
       threads,
       currentThreadId,
+      threadKey: normalized.threadKey || "",
     }),
   });
 }
@@ -597,6 +758,7 @@ module.exports = {
   handleModelCommand,
   handleRemoveCommand,
   handleSendCommand,
+  handleStatusCommand,
   handleUnknownCommand,
   handleWhereCommand,
   handleWorkspacesCommand,

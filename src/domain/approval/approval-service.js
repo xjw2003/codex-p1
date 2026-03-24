@@ -132,10 +132,16 @@ async function handleApprovalCommand(runtime, normalized) {
       kind: outcome.decision === "accept" ? "success" : "info",
     });
   } catch (error) {
+    if (threadId && shouldClearStaleApproval(error)) {
+      runtime.pendingApprovalByThreadId.delete(threadId);
+      runtime.clearApprovalWaitingHint(threadId);
+    }
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: formatFailureText("处理授权失败", error),
+      text: shouldClearStaleApproval(error)
+        ? "这条授权请求已经失效，线程里的待授权状态已清除。请重新触发需要授权的操作。"
+        : formatFailureText("处理授权失败", error),
     });
   }
 }
@@ -208,8 +214,32 @@ async function handleApprovalCardActionAsync(runtime, action, data) {
     }
   } catch (error) {
     runtime.clearApprovalWaitingHint(action.threadId);
+    if (shouldClearStaleApproval(error)) {
+      runtime.pendingApprovalByThreadId.delete(action.threadId);
+      await runtime.sendCardActionFeedback(
+        data,
+        "这条授权请求已经失效，线程里的待授权状态已清除。请重新触发需要授权的操作。",
+        "error"
+      );
+      return;
+    }
     await runtime.sendCardActionFeedback(data, formatFailureText("处理失败", error), "error");
   }
+}
+
+function shouldClearStaleApproval(error) {
+  const message = String(error?.message || "").trim().toLowerCase();
+  if (!message) {
+    return false;
+  }
+  return (
+    message.includes("unknown request")
+    || message.includes("request not found")
+    || message.includes("approval request not found")
+    || message.includes("already resolved")
+    || message.includes("expired")
+    || message.includes("timed out")
+  );
 }
 
 function scheduleApprovalWaitingHint(runtime, { threadId, chatId, replyToMessageId = "" }) {

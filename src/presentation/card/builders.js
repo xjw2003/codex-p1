@@ -168,7 +168,7 @@ function buildInfoCard(text, { kind = "info" } = {}) {
   };
 }
 
-function buildThreadRow({ thread, isCurrent, currentThreadStatusText = "" }) {
+function buildThreadRow({ thread, isCurrent, currentThreadStatusText = "", threadKey = "" }) {
   return {
     tag: "column_set",
     flex_mode: "none",
@@ -208,7 +208,7 @@ function buildThreadRow({ thread, isCurrent, currentThreadStatusText = "" }) {
                       tag: "button",
                       text: { tag: "plain_text", content: "最近消息" },
                       type: "primary",
-                      value: buildThreadActionValue("messages", thread.id),
+                      value: buildThreadActionValue("messages", thread.id, threadKey),
                     },
                   ],
                 },
@@ -232,7 +232,7 @@ function buildThreadRow({ thread, isCurrent, currentThreadStatusText = "" }) {
               tag: "button",
               text: { tag: "plain_text", content: "切换" },
               type: "primary",
-              value: buildThreadActionValue("switch", thread.id),
+              value: buildThreadActionValue("switch", thread.id, threadKey),
             },
           ],
       },
@@ -246,10 +246,12 @@ function buildStatusPanelCard({
   modelOptions,
   effortOptions,
   threadId,
+  threadKey = "",
   currentThread,
   recentThreads,
   totalThreadCount,
   status,
+  statusSummaryText = "",
   noticeText = "",
 }) {
   const isRunning = status?.code === "running";
@@ -304,6 +306,13 @@ function buildStatusPanelCard({
       ],
     }
   );
+  if (typeof statusSummaryText === "string" && statusSummaryText.trim()) {
+    elements.push({
+      tag: "markdown",
+      content: escapeCardMarkdown(statusSummaryText.trim()),
+      text_size: "notation",
+    });
+  }
   elements.push({
     tag: "column_set",
     flex_mode: "none",
@@ -314,7 +323,7 @@ function buildStatusPanelCard({
         weight: 1,
         vertical_align: "top",
         elements: [
-          buildModelSelectElement(codexParams, modelOptions),
+          buildModelSelectElement(codexParams, modelOptions, threadKey),
         ],
       },
       {
@@ -323,7 +332,7 @@ function buildStatusPanelCard({
         weight: 1,
         vertical_align: "top",
         elements: [
-          buildEffortSelectElement(codexParams, effortOptions),
+          buildEffortSelectElement(codexParams, effortOptions, threadKey),
         ],
       },
     ],
@@ -344,6 +353,7 @@ function buildStatusPanelCard({
         thread: row.thread,
         isCurrent: row.isCurrent,
         currentThreadStatusText,
+        threadKey,
       }));
     });
   } else {
@@ -358,17 +368,17 @@ function buildStatusPanelCard({
   if (shouldShowAllThreadsButton) {
     footerColumns.push(buildFooterButtonColumn({
       text: "全部线程",
-      value: buildPanelActionValue("open_threads"),
+      value: buildPanelActionValue("open_threads", threadKey),
     }));
   }
   footerColumns.push(buildFooterButtonColumn({
     text: "新建",
-    value: buildPanelActionValue("new_thread"),
+    value: buildPanelActionValue("new_thread", threadKey),
   }));
   if (isRunning) {
     footerColumns.push(buildFooterButtonColumn({
       text: "停止",
-      value: buildPanelActionValue("stop"),
+      value: buildPanelActionValue("stop", threadKey),
       type: "danger",
     }));
   }
@@ -395,7 +405,7 @@ function buildStatusPanelCard({
   };
 }
 
-function buildThreadPickerCard({ workspaceRoot, threads, currentThreadId }) {
+function buildThreadPickerCard({ workspaceRoot, threads, currentThreadId, threadKey = "" }) {
   const elements = [
     {
       tag: "markdown",
@@ -418,6 +428,7 @@ function buildThreadPickerCard({ workspaceRoot, threads, currentThreadId }) {
       thread,
       isCurrent,
       currentThreadStatusText: "",
+      threadKey,
     }));
   });
 
@@ -426,7 +437,7 @@ function buildThreadPickerCard({ workspaceRoot, threads, currentThreadId }) {
     {
       tag: "button",
       text: { tag: "plain_text", content: "新建线程" },
-      value: buildPanelActionValue("new_thread"),
+      value: buildPanelActionValue("new_thread", threadKey),
     }
   );
 
@@ -452,6 +463,21 @@ function buildHelpCardText() {
       "**绑定项目**",
       "`/codex bind /绝对路径`",
       "把当前飞书会话绑定到一个本地项目。",
+    ],
+    [
+      "**主动查询卡住原因**",
+      "`/codex status`",
+      "主动查询当前线程是否在等待授权、执行中无新进展，或连接是否异常。",
+    ],
+    [
+      "**查看当前登录账号**",
+      "`/codex account`",
+      "查看当前这个 bot 进程实际使用的 Codex 登录账号信息。",
+    ],
+    [
+      "**查看当前额度**",
+      "`/codex quota`",
+      "查看最近一次 Codex 推送的额度使用百分比和重置时间。",
     ],
     [
       "**查看当前状态**",
@@ -541,7 +567,7 @@ function listBoundWorkspaces(binding) {
     }));
 }
 
-function buildWorkspaceBindingsCard(items) {
+function buildWorkspaceBindingsCard(items, { threadKey = "" } = {}) {
   const elements = [
     {
       tag: "markdown",
@@ -593,7 +619,7 @@ function buildWorkspaceBindingsCard(items) {
                         tag: "button",
                         text: { tag: "plain_text", content: "线程列表" },
                         type: "primary",
-                        value: buildWorkspaceActionValue("status", item.workspaceRoot),
+                        value: buildWorkspaceActionValue("status", item.workspaceRoot, threadKey),
                       },
                     ],
                   },
@@ -625,7 +651,7 @@ function buildWorkspaceBindingsCard(items) {
                         tag: "button",
                         text: { tag: "plain_text", content: "移除" },
                         type: "default",
-                        value: buildWorkspaceActionValue("remove", item.workspaceRoot),
+                        value: buildWorkspaceActionValue("remove", item.workspaceRoot, threadKey),
                       },
                     ],
                   },
@@ -637,7 +663,7 @@ function buildWorkspaceBindingsCard(items) {
                         tag: "button",
                         text: { tag: "plain_text", content: "切换" },
                         type: "primary",
-                        value: buildWorkspaceActionValue("switch", item.workspaceRoot),
+                        value: buildWorkspaceActionValue("switch", item.workspaceRoot, threadKey),
                       },
                     ],
                   },
@@ -768,10 +794,11 @@ function truncateDisplayText(text, maxLength) {
   return `${chars.slice(0, maxLength).join("")}...`;
 }
 
-function buildPanelActionValue(action) {
+function buildPanelActionValue(action, threadKey = "") {
   return {
     kind: "panel",
     action,
+    threadKey,
   };
 }
 
@@ -791,7 +818,7 @@ function buildFooterButtonColumn({ text, value, type = "" }) {
   };
 }
 
-function buildModelSelectElement(codexParams, modelOptions) {
+function buildModelSelectElement(codexParams, modelOptions, threadKey = "") {
   const options = normalizeSelectOptions(modelOptions);
   if (!options.length) {
     return {
@@ -810,11 +837,11 @@ function buildModelSelectElement(codexParams, modelOptions) {
     },
     options,
     initial_option: initialOption?.value || undefined,
-    value: buildPanelActionValue("set_model"),
+    value: buildPanelActionValue("set_model", threadKey),
   };
 }
 
-function buildEffortSelectElement(codexParams, effortOptions) {
+function buildEffortSelectElement(codexParams, effortOptions, threadKey = "") {
   const options = normalizeSelectOptions(effortOptions);
   if (!options.length) {
     return {
@@ -833,7 +860,7 @@ function buildEffortSelectElement(codexParams, effortOptions) {
     },
     options,
     initial_option: initialOption?.value || undefined,
-    value: buildPanelActionValue("set_effort"),
+    value: buildPanelActionValue("set_effort", threadKey),
   };
 }
 
@@ -864,19 +891,21 @@ function findOptionByValue(options, selectedValue) {
   return options.find((option) => String(option?.value || "").trim().toLowerCase() === normalized) || null;
 }
 
-function buildThreadActionValue(action, threadId) {
+function buildThreadActionValue(action, threadId, threadKey = "") {
   return {
     kind: "thread",
     action,
     threadId,
+    threadKey,
   };
 }
 
-function buildWorkspaceActionValue(action, workspaceRoot) {
+function buildWorkspaceActionValue(action, workspaceRoot, threadKey = "") {
   return {
     kind: "workspace",
     action,
     workspaceRoot,
+    threadKey,
   };
 }
 

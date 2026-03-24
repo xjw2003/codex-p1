@@ -193,18 +193,128 @@ function diagnoseInactivity(runtime, watch) {
 }
 
 function buildInactivityHintText({ stage, waitedSeconds, diagnosis, threadId }) {
+  return buildInactivityStatusText({
+    heading: "超时提醒",
+    stage,
+    waitedSeconds,
+    diagnosis,
+    threadId,
+  });
+}
+
+function getInactivityStatus(runtime, threadId) {
+  const normalizedThreadId = normalizeId(threadId);
+  if (!normalizedThreadId) {
+    return null;
+  }
+  const watch = runtime.responseWatchByThreadId.get(normalizedThreadId);
+  if (!watch) {
+    return null;
+  }
+
+  const now = Date.now();
+  return {
+    stage: watch.stage,
+    waitedSeconds: Math.max(1, Math.round((now - watch.lastProgressAt) / 1000)),
+    diagnosis: diagnoseInactivity(runtime, watch),
+    threadId: watch.threadId,
+  };
+}
+
+function buildQueriedInactivityStatusText(runtime, status) {
+  if (!status) {
+    return "";
+  }
+  return buildInactivityStatusText({
+    runtime,
+    heading: "当前状态查询",
+    stage: status.stage,
+    waitedSeconds: status.waitedSeconds,
+    diagnosis: status.diagnosis,
+    threadId: status.threadId,
+  });
+}
+
+function buildInactivityStatusText({ runtime, heading, stage, waitedSeconds, diagnosis, threadId }) {
   const stageLabel = stage === "approval"
     ? "授权后等待继续执行"
     : "消息下发后等待响应";
   const lines = [
-    `**超时提醒：${stageLabel}**`,
+    `**${normalizeText(heading) || "超时提醒"}：${stageLabel}**`,
     `已等待：\`${waitedSeconds}s\``,
     `线程：\`${threadId}\``,
     `判断：${diagnosis.title}`,
     `原因：${diagnosis.reason}`,
     `建议：${diagnosis.action}`,
   ];
+  const runtimeStatusLines = buildRuntimeStatusLines(runtime, threadId);
+  if (runtimeStatusLines.length) {
+    lines.push("");
+    lines.push(...runtimeStatusLines);
+  }
   return lines.join("\n");
+}
+
+function buildRuntimeStatusLines(runtime, threadId) {
+  if (!runtime) {
+    return [];
+  }
+  const lines = [
+    `桥接层状态：${describeBridgeStatus(runtime, threadId)}`,
+    `Codex 连接：${describeCodexConnection(runtime)}`,
+  ];
+  const recentEventText = describeRecentCodexEvent(runtime);
+  if (recentEventText) {
+    lines.push(recentEventText);
+  }
+  return lines;
+}
+
+function describeBridgeStatus(runtime, threadId) {
+  if (runtime.pendingApprovalByThreadId.has(threadId)) {
+    return "等待授权";
+  }
+  if (runtime.activeTurnIdByThreadId.has(threadId)) {
+    return "运行中";
+  }
+  return "空闲";
+}
+
+function describeCodexConnection(runtime) {
+  const snapshot = runtime.codex?.getConnectionSnapshot?.() || null;
+  if (!snapshot) {
+    return "未知";
+  }
+  if (!snapshot.connected) {
+    const detail = normalizeText(snapshot.lastDisconnectReason);
+    return detail ? `未连接（${detail}）` : "未连接";
+  }
+  if (!snapshot.ready) {
+    return "连接中";
+  }
+  return "已连接";
+}
+
+function describeRecentCodexEvent(runtime) {
+  const method = normalizeText(runtime.lastCodexEventMethod);
+  const timestampText = formatStatusTimestamp(runtime.lastCodexEventAt);
+  if (!method && !timestampText) {
+    return "";
+  }
+  if (method && timestampText) {
+    return `最近 Codex 事件：\`${method}\` · ${timestampText}`;
+  }
+  return method
+    ? `最近 Codex 事件：\`${method}\``
+    : `最近 Codex 事件时间：${timestampText}`;
+}
+
+function formatStatusTimestamp(value) {
+  const timestamp = Number(value || 0);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return "";
+  }
+  return new Date(timestamp).toLocaleString("zh-CN", { hour12: false });
 }
 
 function resolveInactivityTimeoutMs(runtime) {
@@ -243,7 +353,9 @@ function normalizeText(value) {
 }
 
 module.exports = {
+  buildQueriedInactivityStatusText,
   clearResponseWatch,
+  getInactivityStatus,
   startResponseWatch,
   touchResponseWatch,
 };

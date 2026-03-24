@@ -7,6 +7,9 @@ const {
 
 const TEXT_COMMAND_HANDLER_METHODS = {
   stop: "handleStopCommand",
+  status: "handleStatusCommand",
+  account: "handleAccountCommand",
+  quota: "handleQuotaCommand",
   bind: "handleBindCommand",
   where: "handleWhereCommand",
   inspect_message: "handleMessageCommand",

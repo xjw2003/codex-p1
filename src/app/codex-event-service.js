@@ -1,17 +1,67 @@
 const codexMessageUtils = require("../infra/codex/message-utils");
+const quotaRuntime = require("../domain/quota/quota-service");
 const { formatFailureText } = require("../shared/error-text");
 
 async function handleStopCommand(runtime, normalized) {
   const bindingKey = runtime.sessionStore.buildBindingKey(normalized);
   const workspaceRoot = runtime.resolveWorkspaceRootForBinding(bindingKey);
-  const threadId = workspaceRoot ? runtime.resolveThreadIdForBinding(bindingKey, workspaceRoot) : null;
-  const turnId = threadId ? runtime.activeTurnIdByThreadId.get(threadId) || null : null;
+  const threadId = workspaceRoot ? resolveKnownThreadIdForWorkspace(runtime, bindingKey, workspaceRoot) : null;
+
+  if (!workspaceRoot) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: "Current chat is not bound to a workspace yet. Send `/codex bind /absolute/path` first.",
+    });
+    return;
+  }
 
   if (!threadId) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: "当前会话还没有可停止的运行任务。",
+      text: [
+        `Current workspace: \`${workspaceRoot}\``,
+        "There is no active thread to stop.",
+      ].join("\n"),
+    });
+    return;
+  }
+
+  const connection = runtime.codex?.getConnectionSnapshot?.() || null;
+  if (connection && !connection.connected) {
+    const detail = normalizeText(connection.lastDisconnectReason) || "Codex is not connected.";
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: [
+        `Current workspace: \`${workspaceRoot}\``,
+        `Thread: \`${threadId}\``,
+        `Stop failed: ${detail}`,
+      ].join("\n"),
+      kind: "error",
+    });
+    return;
+  }
+
+  const status = runtime.describeWorkspaceStatus(threadId);
+  const inactivityStatus = runtime.getInactivityStatus?.(threadId) || null;
+  const activeTurnId = runtime.activeTurnIdByThreadId.get(threadId) || "";
+  const recentTurnId = codexMessageUtils.extractTurnIdFromRunKey(runtime.currentRunKeyByThreadId.get(threadId) || "");
+  const shouldUseRecentTurnId = status.code === "running" || status.code === "approval" || !!inactivityStatus;
+  const turnId = activeTurnId || (shouldUseRecentTurnId ? recentTurnId : "");
+
+  if (!turnId) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: buildStopUnavailableText({
+        workspaceRoot,
+        threadId,
+        status,
+        hasWatch: !!inactivityStatus,
+      }),
+      kind: status.code === "running" || status.code === "approval" ? "error" : "info",
     });
     return;
   }
@@ -24,13 +74,25 @@ async function handleStopCommand(runtime, normalized) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: "已发送停止请求。",
+      text: [
+        `Current workspace: \`${workspaceRoot}\``,
+        `Thread: \`${threadId}\``,
+        `Turn: \`${turnId}\``,
+        "Stop request sent.",
+      ].join("\n"),
+      kind: "progress",
     });
   } catch (error) {
     await runtime.sendInfoCardMessage({
       chatId: normalized.chatId,
       replyToMessageId: normalized.messageId,
-      text: formatFailureText("停止失败", error),
+      text: [
+        `Current workspace: \`${workspaceRoot}\``,
+        `Thread: \`${threadId}\``,
+        `Turn: \`${turnId}\``,
+        formatFailureText("Stop failed", error, "Unknown error"),
+      ].join("\n"),
+      kind: "error",
     });
   }
 }
@@ -38,7 +100,10 @@ async function handleStopCommand(runtime, normalized) {
 function handleCodexMessage(runtime, message) {
   if (typeof message?.method === "string") {
     console.log(`[codex-im] codex event ${message.method}`);
+    runtime.lastCodexEventAt = Date.now();
+    runtime.lastCodexEventMethod = message.method;
   }
+  quotaRuntime.updateLatestRateLimits(runtime, message?.params || null);
   codexMessageUtils.trackRunningTurn(runtime.activeTurnIdByThreadId, message);
   codexMessageUtils.trackPendingApproval(runtime.pendingApprovalByThreadId, message);
   codexMessageUtils.trackRunKeyState(runtime.currentRunKeyByThreadId, runtime.activeTurnIdByThreadId, message);
@@ -48,6 +113,10 @@ function handleCodexMessage(runtime, message) {
   if (!outbound) {
     if (threadIdFromEvent && isTerminalTurnMessage(message)) {
       runtime.clearResponseWatch(threadIdFromEvent);
+      runtime.clearPendingReactionForThread(threadIdFromEvent).catch((error) => {
+        console.error(`[codex-im] failed to clear pending reaction: ${error.message}`);
+      });
+      runtime.cleanupThreadRuntimeState(threadIdFromEvent);
     }
     return;
   }
@@ -129,7 +198,16 @@ async function deliverToFeishu(runtime, event) {
         threadId: event.payload.threadId,
         turnId: event.payload.turnId,
         chatId: event.payload.chatId,
-        text: event.payload.text || "执行失败",
+        text: event.payload.text || "Execution failed",
+        state: "failed",
+      });
+      await sendFileChangeSummaryIfAny(runtime, event.payload);
+    } else if (event.payload.state === "cancelled") {
+      await runtime.upsertAssistantReplyCard({
+        threadId: event.payload.threadId,
+        turnId: event.payload.turnId,
+        chatId: event.payload.chatId,
+        text: event.payload.text || "Stopped.",
         state: "failed",
       });
       await sendFileChangeSummaryIfAny(runtime, event.payload);
@@ -179,9 +257,11 @@ function recordFileChange(runtime, payload) {
     if (!path) {
       continue;
     }
-    const kind = normalizeText(change?.kind) || "unknown";
+    const kind = normalizeText(change?.kind).toLowerCase();
     const kindSet = current.paths.get(path) || new Set();
-    kindSet.add(kind);
+    if (kind && kind !== "unknown") {
+      kindSet.add(kind);
+    }
     current.paths.set(path, kindSet);
   }
 
@@ -225,15 +305,61 @@ function buildFileChangeSummaryText(pathMap) {
 
   const maxDisplay = 30;
   const displayItems = items.slice(0, maxDisplay);
-  const lines = [`**本轮代码改动：${items.length} 个文件**`];
+  const lines = [`**Code Changes: ${items.length} file(s)**`];
   for (const item of displayItems) {
     const kindText = item.kinds.length ? ` (${item.kinds.join("/")})` : "";
     lines.push(`- \`${escapeInlineCode(item.path)}\`${kindText}`);
   }
   if (items.length > maxDisplay) {
-    lines.push(`- ... 其余 ${items.length - maxDisplay} 个文件未展开`);
+    lines.push(`- ... ${items.length - maxDisplay} more file(s) not shown`);
   }
   return lines.join("\n");
+}
+
+function buildStopUnavailableText({ workspaceRoot, threadId, status, hasWatch }) {
+  const lines = [
+    `Current workspace: \`${workspaceRoot}\``,
+    `Thread: \`${threadId}\``,
+    `Status: ${status?.label || "unknown"}`,
+  ];
+
+  if (status?.code === "running" || status?.code === "approval" || hasWatch) {
+    lines.push("The bridge still sees activity on this thread, but it does not currently have a cancellable turn id.");
+    lines.push("Send `/codex status` once more to confirm the latest state. If it stays stuck, restart `codex-im` and try again.");
+    return lines.join("\n");
+  }
+
+  lines.push("There is no running task to stop right now.");
+  return lines.join("\n");
+}
+
+function resolveKnownThreadIdForWorkspace(runtime, bindingKey, workspaceRoot) {
+  const boundThreadId = runtime.resolveThreadIdForBinding(bindingKey, workspaceRoot);
+  if (boundThreadId) {
+    return boundThreadId;
+  }
+
+  const candidates = new Set([
+    ...runtime.responseWatchByThreadId.keys(),
+    ...runtime.activeTurnIdByThreadId.keys(),
+    ...runtime.pendingApprovalByThreadId.keys(),
+  ]);
+
+  for (const threadId of candidates) {
+    if (typeof threadId !== "string" || !threadId.trim()) {
+      continue;
+    }
+    const normalizedThreadId = threadId.trim();
+    const threadBindingKey = runtime.bindingKeyByThreadId?.get(normalizedThreadId) || "";
+    if (threadBindingKey && threadBindingKey !== bindingKey) {
+      continue;
+    }
+    if (runtime.resolveWorkspaceRootForThread(normalizedThreadId) === workspaceRoot) {
+      return normalizedThreadId;
+    }
+  }
+
+  return null;
 }
 
 function normalizeText(value) {

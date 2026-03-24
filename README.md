@@ -9,7 +9,8 @@
 通过 `CODEX_IM_PROXY_URL` 注入 `HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / WS_PROXY / WSS_PROXY`，仅影响本项目拉起的 Codex/VSCode 进程链路，不影响你电脑其他应用的联网方式。
 
 3. 飞书可见运行状态与超时原因判断  
-发送消息后，如果超过 `CODEX_IM_INACTIVITY_TIMEOUT_MS`（默认 60000ms）无可见进展，会自动在飞书提示原因（如：等待授权、Codex 连接异常、飞书连接异常、仍在执行、状态未确定），便于你决定是否重试或停止。
+发送消息后，如果超过 `CODEX_IM_INACTIVITY_TIMEOUT_MS`（默认 60000ms）无可见进展，会自动在飞书提示原因（如：等待授权、Codex 连接异常、飞书连接异常、仍在执行、状态未确定），便于你决定是否重试或停止。  
+也支持主动发送 `/codex status` 查询当前线程为什么没有新变化，不必等待自动超时提醒。
 
 4. 代码改动完成后自动回报“改了哪些文件”  
 当一轮任务结束（completed/failed）且发生文件修改时，飞书会额外发送“本轮代码改动”清单（文件路径 + 变更类型）。
@@ -36,7 +37,7 @@ CODEX_IM_INACTIVITY_TIMEOUT_MS=60000
 
 `codex-im` 是一个本地运行的飞书机器人桥接层：
 
-`飞书消息 -> 本机 codex app-server -> 飞书回复`
+`飞书消息 -> 本机 Codex 进程（可由 VS Code 插件 codex.exe 提供）-> 飞书回复`
 
 Codex 操作都留在 本地，飞书只负责消息交互。
 
@@ -49,6 +50,9 @@ Codex 操作都留在 本地，飞书只负责消息交互。
 - 回复到触发它的原消息
 - `/codex bind` 绑定项目
 - `/codex where` 查看当前项目/线程
+- `/codex status` 主动查询当前线程是否在等待授权、执行中无新进展，或连接是否异常
+- `/codex account` 查看当前 bot 进程实际使用的 Codex 登录账号
+- `/codex quota` 查看最近一次 Codex 推送的额度使用百分比和重置时间
 - `/codex workspace` 查看当前会话已记录项目和线程
 - `/codex remove /绝对路径` 移除会话绑定项目
 - `/codex send <相对文件路径>` 发送当前绑定项目内的文件
@@ -58,7 +62,7 @@ Codex 操作都留在 本地，飞书只负责消息交互。
 - `/codex stop` 停止当前运行
 - `/codex model` / `/codex model update` / `/codex model <modelId>` 查看可用模型、刷新可用模型以及推理强度、设置模型
 - `/codex effort` / `/codex effort <low|medium|high|xhigh>` 设置推理强度
-- `/codex approve` / `/codex reject` 审批卡片
+- `/codex approve` / `/codex approve workspace` / `/codex reject` 审批卡片
 
 ## 安装
 
@@ -84,6 +88,32 @@ set -euo pipefail
 npm install -g @vdug/codex-im
 codex-im feishu-bot
 ```
+
+## Windows 启动脚本
+
+根目录保留 4 个 Windows 启动脚本，推荐优先使用菜单入口：
+
+- `银月助手-启动菜单.bat`
+  用途：带菜单的总入口。
+  你可以在黑框里选择使用全局登录态、项目隔离登录态，或者先执行登录。
+
+- `银月助手-默认启动.bat`
+  用途：按当前默认环境直接启动飞书助手。
+  这是最原始、最直接的启动方式，不会弹出登录态选择菜单。
+
+- `银月助手-项目隔离启动.bat`
+  用途：固定使用项目隔离登录态启动飞书助手。
+  适合已经完成项目隔离登录、后续只想快速启动的场景。
+
+- `银月助手-项目隔离登录.bat`
+  用途：只登录项目隔离账号，不启动飞书助手。
+  适合第一次给这个项目单独登录 Codex，或后续切换项目专用账号。
+
+推荐使用顺序：
+
+1. 第一次使用项目隔离账号时，先运行 `银月助手-项目隔离登录.bat`
+2. 日常启动优先运行 `银月助手-启动菜单.bat`
+3. 如果你确定本次就是用项目隔离账号，也可以直接运行 `银月助手-项目隔离启动.bat`
 
 ## 配置
 
@@ -119,9 +149,11 @@ codex-im feishu-bot
 - `CODEX_IM_FEISHU_STREAMING_OUTPUT`（默认 `true`，设为 `false` 则等 Codex 完成后一次性输出）
 - `CODEX_IM_WORKSPACE_ALLOWLIST`允许绑定的项目白名单
 - `CODEX_IM_CODEX_ENDPOINT` 用来指定 Codex 的远程 WebSocket RPC 地址，默认是启动本地服务
+- `CODEX_IM_CODEX_COMMAND` 指定本机 Codex 可执行文件（可直接填写 VS Code 插件目录中的 `codex.exe`）
 - `CODEX_IM_VSCODE_COMMAND` VSCode 可执行文件路径
 - `CODEX_IM_VSCODE_LAUNCH_ON_START` 启动 `codex-im` 时自动拉起 VSCode
 - `CODEX_IM_VSCODE_KILL_BEFORE_LAUNCH` 自动启动 VSCode 前先关闭已有 `Code.exe`
+- `CODEX_IM_INACTIVITY_TIMEOUT_MS` 无可见进展超时阈值（默认 `60000` 毫秒），超时后飞书会自动提示原因判断
 - `CODEX_IM_SESSIONS_FILE` session文件路径
 
 ### 代理与 VSCode 启动示例
@@ -155,6 +187,9 @@ npm run feishu-bot
 
 - `/codex bind /绝对路径`
 - `/codex where`
+- `/codex status`
+- `/codex account`
+- `/codex quota`
 - `/codex workspace`
 - `/codex remove /绝对路径`
 - `/codex send <相对文件路径>`
@@ -164,9 +199,11 @@ npm run feishu-bot
 - `/codex stop`
 - `/codex model`
 - `/codex model update`
+- `/codex model <modelId>`
 - `/codex effort`
+- `/codex effort <low|medium|high|xhigh>`
 - `/codex approve`
-- `/codex approve session`
+- `/codex approve workspace`
 - `/codex reject`
 - `/codex help`
 

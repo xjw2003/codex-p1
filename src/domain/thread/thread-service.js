@@ -50,7 +50,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       normalized,
     });
     console.log(`[codex-im] turn/start first message thread=${createdThreadId}`);
-    await runtime.codex.sendUserMessage({
+    const response = await runtime.codex.sendUserMessage({
       threadId: createdThreadId,
       text: normalized.text,
       model: codexParams.model || null,
@@ -58,6 +58,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       accessMode: runtime.config.defaultCodexAccessMode,
       workspaceRoot,
     });
+    rememberStartedTurn(runtime, createdThreadId, response);
     runtime.setThreadBindingKey(createdThreadId, bindingKey);
     runtime.setThreadWorkspaceRoot(createdThreadId, workspaceRoot);
     return createdThreadId;
@@ -65,7 +66,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
 
   try {
     await ensureThreadResumed(runtime, threadId);
-    await runtime.codex.sendUserMessage({
+    const response = await runtime.codex.sendUserMessage({
       threadId,
       text: normalized.text,
       model: codexParams.model || null,
@@ -73,6 +74,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       accessMode: runtime.config.defaultCodexAccessMode,
       workspaceRoot,
     });
+    rememberStartedTurn(runtime, threadId, response);
     console.log(`[codex-im] turn/start ok workspace=${workspaceRoot} thread=${threadId}`);
     runtime.setThreadBindingKey(threadId, bindingKey);
     runtime.setThreadWorkspaceRoot(threadId, workspaceRoot);
@@ -91,7 +93,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       normalized,
     });
     console.log(`[codex-im] turn/start retry thread=${recreatedThreadId}`);
-    await runtime.codex.sendUserMessage({
+    const response = await runtime.codex.sendUserMessage({
       threadId: recreatedThreadId,
       text: normalized.text,
       model: codexParams.model || null,
@@ -99,6 +101,7 @@ async function ensureThreadAndSendMessage(runtime, { bindingKey, workspaceRoot, 
       accessMode: runtime.config.defaultCodexAccessMode,
       workspaceRoot,
     });
+    rememberStartedTurn(runtime, recreatedThreadId, response);
     runtime.setThreadBindingKey(recreatedThreadId, bindingKey);
     runtime.setThreadWorkspaceRoot(recreatedThreadId, workspaceRoot);
     return recreatedThreadId;
@@ -311,6 +314,34 @@ function isSupportedThreadSourceKind(sourceKind) {
 function shouldRecreateThread(error) {
   const message = String(error?.message || "").toLowerCase();
   return message.includes("thread not found") || message.includes("unknown thread");
+}
+
+function rememberStartedTurn(runtime, threadId, response) {
+  const normalizedThreadId = typeof threadId === "string" ? threadId.trim() : "";
+  const turnId = extractTurnIdFromStartResponse(response);
+  if (!normalizedThreadId || !turnId) {
+    return;
+  }
+
+  runtime.activeTurnIdByThreadId.set(normalizedThreadId, turnId);
+  runtime.currentRunKeyByThreadId.set(
+    normalizedThreadId,
+    codexMessageUtils.buildRunKey(normalizedThreadId, turnId)
+  );
+}
+
+function extractTurnIdFromStartResponse(response) {
+  const candidates = [
+    response?.result?.turn?.id,
+    response?.result?.turnId,
+    response?.result?.turn?.turnId,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
 }
 
 module.exports = {

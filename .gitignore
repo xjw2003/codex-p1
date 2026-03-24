@@ -42,6 +42,7 @@ dist/
 /sessions.json
 /.codex-schema/
 /.codex-im/
+/.codex-home/
 
 # IDE / editor files
 /.idea/

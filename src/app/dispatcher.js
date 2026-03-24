@@ -12,6 +12,24 @@ async function onFeishuTextEvent(runtime, event) {
     return;
   }
 
+  const currentThreadContext = runtime.getCurrentThreadContext(normalized);
+  if (
+    currentThreadContext?.threadId
+    && runtime.pendingApprovalByThreadId.has(currentThreadContext.threadId)
+  ) {
+    await runtime.sendInfoCardMessage({
+      chatId: normalized.chatId,
+      replyToMessageId: normalized.messageId,
+      text: [
+        "当前线程还有待处理的授权请求。",
+        "请先在授权卡片上点击同意/拒绝，或直接发送 `/codex approve`、`/codex reject`。",
+        "如果你怀疑卡片点击已经失效，可以先发 `/codex status` 检查状态。",
+      ].join("\n"),
+      kind: "info",
+    });
+    return;
+  }
+
   const workspaceContext = await runtime.resolveWorkspaceContext(normalized, {
     replyToMessageId: normalized.messageId,
     missingWorkspaceText: "当前会话还未绑定项目。先发送 `/codex bind /绝对路径`。",

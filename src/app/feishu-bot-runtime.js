@@ -41,6 +41,8 @@ const {
 } = require("../infra/feishu/client-adapter");
 const runtimeCommands = require("./command-dispatcher");
 const approvalRuntime = require("../domain/approval/approval-service");
+const accountRuntime = require("../domain/account/account-service");
+const quotaRuntime = require("../domain/quota/quota-service");
 const runtimeState = require("../domain/session/binding-context");
 const threadRuntime = require("../domain/thread/thread-service");
 const workspaceRuntime = require("../domain/workspace/workspace-service");
@@ -82,6 +84,9 @@ class FeishuBotRuntime {
     this.workspaceRootByThreadId = new Map();
     this.approvalAllowlistByWorkspaceRoot = new Map();
     this.inFlightApprovalRequestKeys = new Set();
+    this.latestRateLimits = null;
+    this.lastCodexEventAt = 0;
+    this.lastCodexEventMethod = "";
     this.resumedThreadIds = new Set();
     this.feishuWsState = "unknown";
     this.feishuWsLastError = "";
@@ -274,6 +279,9 @@ function attachRuntimeForwarders() {
     tryAutoApproveRequest: approvalPolicyRuntime.tryAutoApproveRequest,
     applyApprovalDecision: approvalRuntime.applyApprovalDecision,
     handleBindCommand: workspaceRuntime.handleBindCommand,
+    handleStatusCommand: workspaceRuntime.handleStatusCommand,
+    handleAccountCommand: accountRuntime.handleAccountCommand,
+    handleQuotaCommand: quotaRuntime.handleQuotaCommand,
     handleWhereCommand: workspaceRuntime.handleWhereCommand,
     showStatusPanel: workspaceRuntime.showStatusPanel,
     handleMessageCommand: workspaceRuntime.handleMessageCommand,
@@ -310,6 +318,8 @@ function attachRuntimeForwarders() {
     startResponseWatch: responseWatchRuntime.startResponseWatch,
     touchResponseWatch: responseWatchRuntime.touchResponseWatch,
     clearResponseWatch: responseWatchRuntime.clearResponseWatch,
+    getInactivityStatus: responseWatchRuntime.getInactivityStatus,
+    buildQueriedInactivityStatusText: responseWatchRuntime.buildQueriedInactivityStatusText,
     clearApprovalWaitingHint: approvalRuntime.clearApprovalWaitingHint,
     sendCardActionFeedbackByContext,
     sendCardActionFeedback,

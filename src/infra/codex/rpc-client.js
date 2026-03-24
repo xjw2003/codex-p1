@@ -5,6 +5,7 @@ const WebSocket = require("ws");
 
 const IS_WINDOWS = os.platform() === "win32";
 const DEFAULT_CODEX_COMMAND = "codex";
+const DEFAULT_REQUEST_TIMEOUT_MS = 60 * 1000;
 const WINDOWS_EXECUTABLE_SUFFIX_RE = /\.(cmd|exe|bat)$/i;
 const WINDOWS_SHELL_SUFFIX_RE = /\.(cmd|bat)$/i;
 const CODEX_CLIENT_INFO = {
@@ -80,6 +81,7 @@ class CodexRpcClient {
       this.transportConnected = false;
       this.lastDisconnectReason = error?.message || "spawn error";
       this.lastDisconnectAt = Date.now();
+      this.rejectPendingRequests(this.lastDisconnectReason);
       console.error(`[codex-im] failed to spawn Codex app-server via ${selectedCommand || this.codexCommand}: ${error.message}`);
     });
 
@@ -108,6 +110,7 @@ class CodexRpcClient {
       this.transportConnected = false;
       this.lastDisconnectReason = `process exited with code ${code}`;
       this.lastDisconnectAt = Date.now();
+      this.rejectPendingRequests(this.lastDisconnectReason);
       console.error(`[codex-im] codex app-server exited with code ${code}`);
     });
   }
@@ -127,6 +130,7 @@ class CodexRpcClient {
         this.transportConnected = false;
         this.lastDisconnectReason = error?.message || "websocket error";
         this.lastDisconnectAt = Date.now();
+        this.rejectPendingRequests(this.lastDisconnectReason);
         reject(error);
       });
       socket.on("message", (chunk) => {
@@ -140,6 +144,7 @@ class CodexRpcClient {
         this.transportConnected = false;
         this.lastDisconnectReason = this.lastDisconnectReason || "websocket closed";
         this.lastDisconnectAt = Date.now();
+        this.rejectPendingRequests(this.lastDisconnectReason);
       });
     });
   }
@@ -225,13 +230,26 @@ class CodexRpcClient {
   async sendRequest(method, params) {
     const id = createRequestId();
     const payload = JSON.stringify({ id, method, params });
+    const timeoutMs = resolveRequestTimeoutMs(this.env);
 
     const responsePromise = new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timeout = setTimeout(() => {
+        if (!this.pending.has(id)) {
+          return;
+        }
+        this.pending.delete(id);
+        reject(new Error(`Codex RPC request timed out: ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timeout, method });
     });
 
-    logCodexOutboundMessage(`request:${method}`, payload);
-    this.sendRaw(payload);
+    try {
+      logCodexOutboundMessage(`request:${method}`, payload);
+      this.sendRaw(payload);
+    } catch (error) {
+      this.clearPendingRequest(id);
+      throw error;
+    }
     return responsePromise;
   }
 
@@ -271,8 +289,10 @@ class CodexRpcClient {
     logCodexInboundMessage(parsed);
 
     if (parsed && parsed.id != null && this.pending.has(String(parsed.id))) {
-      const { resolve, reject } = this.pending.get(String(parsed.id));
-      this.pending.delete(String(parsed.id));
+      const requestId = String(parsed.id);
+      const entry = this.pending.get(requestId);
+      this.clearPendingRequest(requestId);
+      const { resolve, reject } = entry;
       if (parsed.error) {
         reject(new Error(parsed.error.message || "Codex RPC request failed"));
         return;
@@ -283,6 +303,29 @@ class CodexRpcClient {
 
     for (const listener of this.messageListeners) {
       listener(parsed);
+    }
+  }
+
+  clearPendingRequest(id) {
+    const entry = this.pending.get(id);
+    if (!entry) {
+      return null;
+    }
+    if (entry.timeout) {
+      clearTimeout(entry.timeout);
+    }
+    this.pending.delete(id);
+    return entry;
+  }
+
+  rejectPendingRequests(reason) {
+    const detail = normalizeNonEmptyString(reason) || "transport disconnected";
+    for (const requestId of [...this.pending.keys()]) {
+      const entry = this.clearPendingRequest(requestId);
+      if (!entry) {
+        continue;
+      }
+      entry.reject(new Error(`Codex RPC request failed: ${detail}`));
     }
   }
 }
@@ -463,6 +506,14 @@ function buildExecutionPolicies(accessMode, workspaceRoot) {
     approvalPolicy: "on-request",
     sandboxPolicy,
   };
+}
+
+function resolveRequestTimeoutMs(env = process.env) {
+  const configured = Number(env.CODEX_IM_RPC_TIMEOUT_MS || 0);
+  if (Number.isFinite(configured) && configured >= 1000) {
+    return Math.round(configured);
+  }
+  return DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 module.exports = { CodexRpcClient };
