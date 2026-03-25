@@ -68,15 +68,47 @@ function Require-Command {
   return $command.Source
 }
 
+function Find-VsCodeExtensionCodexCommand {
+  $extensionsRoot = Join-Path $env:USERPROFILE ".vscode\extensions"
+  if (-not (Test-Path -LiteralPath $extensionsRoot)) {
+    return ""
+  }
+
+  $candidates = Get-ChildItem -LiteralPath $extensionsRoot -Directory -Filter "openai.chatgpt-*-win32-x64" -ErrorAction SilentlyContinue
+  if (-not $candidates) {
+    return ""
+  }
+
+  $latest = $candidates | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+  if (-not $latest) {
+    return ""
+  }
+
+  $codexPath = Join-Path $latest.FullName "bin\windows-x86_64\codex.exe"
+  if (Test-Path -LiteralPath $codexPath) {
+    return $codexPath
+  }
+
+  return ""
+}
+
 function Resolve-CodexCommand {
   $configured = [Environment]::GetEnvironmentVariable("CODEX_IM_CODEX_COMMAND", "Process")
   if ($configured) {
-    return $configured
+    if (Test-Path -LiteralPath $configured) {
+      return $configured
+    }
+    Write-Host "[codex-im] Configured CODEX_IM_CODEX_COMMAND is invalid: $configured"
+  }
+
+  $extensionCodex = Find-VsCodeExtensionCodexCommand
+  if ($extensionCodex) {
+    return $extensionCodex
   }
 
   $command = Get-Command "codex" -ErrorAction SilentlyContinue
   if ($null -eq $command) {
-    throw "[codex-im] Set CODEX_IM_CODEX_COMMAND in .env or install codex in PATH before logging in."
+    throw "[codex-im] Cannot find a valid codex executable. Update CODEX_IM_CODEX_COMMAND or install codex in PATH."
   }
 
   return $command.Source
@@ -215,6 +247,9 @@ Set-Location -LiteralPath $repoRoot
 
 Import-DotEnv -Path (Join-Path $repoRoot ".env")
 
+$resolvedCodexCommand = Resolve-CodexCommand
+[Environment]::SetEnvironmentVariable("CODEX_IM_CODEX_COMMAND", $resolvedCodexCommand, "Process")
+
 $resolvedMode = $Mode
 while ($true) {
   if ($resolvedMode -eq "prompt") {
@@ -235,6 +270,7 @@ if ($resolvedMode -eq "exit") {
 }
 
 Write-Host "[codex-im] Repo root: $repoRoot"
+Write-Host "[codex-im] Codex command: $resolvedCodexCommand"
 
 $useIsolatedHome = $resolvedMode -in @("isolated", "login-isolated")
 if ($useIsolatedHome) {
